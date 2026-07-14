@@ -1,0 +1,369 @@
+This audit is exactly the evidence needed to make the next version better instead of merely larger.
+
+What the baseline is telling us
+
+The architecture is already strong where historical repetition exists:
+
+Layer	NAICS accuracy	qe4ar accuracy	qe5ar accuracy
+Adaptive exact memory	96.3%	98.0%	97.8%
+Exact dictionary	96.3%	95.0%	96.8%
+Model-only rows	77.8%	46.1%	44.8%
+
+The main weakness is therefore not the historical-memory layer. That layer is excellent. The weakness is classifying unfamiliar or ambiguous records where the deterministic layers do not match.
+
+The gap between top-1 and top-4 is especially revealing:
+
+qa20a: 84.80% top-1 → 95.07% top-4    gap: 10.27 points
+qe4ar: 66.78% top-1 → 83.54% top-4    gap: 16.76 points
+qe5ar: 69.87% top-1 → 83.41% top-4    gap: 13.54 points
+
+That means the correct code is frequently already generated, but it is ranked second, third, or fourth. Throwing more first-stage classifier families at this problem would be expensive and poorly targeted. The strongest next step is a domain-trained candidate reranker.
+
+This matches the standard retrieve-and-rerank architecture: a fast bi-encoder or supervised classifier produces a candidate pool, then a Cross-Encoder jointly examines the record and each candidate definition to reorder them. Sentence Transformers specifically recommends this two-stage architecture and notes that task-specific reranker fine-tuning can be crucial.  
+
+The audit also shows:
+
+* NAICS confidence is materially miscalibrated, with ECE 0.1087.
+* SOC confidence is better, but still not reliable enough to interpret as literal probability.
+* Rare and high-cardinality SOC groups remain weak.
+* Unseen employer names are a meaningful source of drift.
+* Linear SVC is consistently winning, so the evidence does not justify reviving LightGBM, giant Optuna searches, or slow logistic-regression tournaments.
+
+The next version I built
+
+Download the complete NAICS/SOC Reranker V2 package⁠￼
+
+Key files:
+
+* V2 adaptive-memory autocoder⁠￼
+* V2 improvement audit⁠￼
+* Domain Cross-Encoder trainer⁠￼
+* Complete V2 README⁠￼
+* Install V2 requirements⁠￼
+* Create calibration split while preserving Gold⁠￼
+* Train domain Cross-Encoder⁠￼
+* Train and audit Reranker V2⁠￼
+* Score new data⁠￼
+* V2 preflight checker⁠￼
+
+What changed in V2
+
+1. The Cross-Encoder now reranks all useful candidates
+
+The earlier architecture could rerank semantic-memory candidates, but it did not always rerank the complete union of:
+
+supervised ML candidates
+semantic-memory candidates
+adaptive-memory partial candidates
+dictionary alternatives
+
+V2 merges these into an internal candidate pool of up to 24 codes and reranks the combined pool. The public .sav and log can still expose the top four.
+
+This is important because the correct code may be found by Linear SVC even when FAISS does not retrieve it, or vice versa.
+
+2. The Cross-Encoder is fine-tuned on your task
+
+The generic MS MARCO Cross-Encoder was trained for general information retrieval, not for distinguishing neighboring SOC or NAICS codes.
+
+V2 creates task-specific training pairs from your historical coded data:
+
+Positive:
+survey context + correct code description
+Hard negatives:
+survey context + confused code in the same SOC/NAICS hierarchy
+Semantic negatives:
+survey context + highly similar but incorrect candidate
+Random negatives:
+survey context + unrelated code
+
+Hard negatives are particularly useful because they teach the model distinctions such as:
+
+registered nurse vs licensed practical nurse
+bookkeeper vs accountant
+retail supervisor vs retail salesperson
+software developer vs computer systems analyst
+construction laborer vs operating engineer
+
+The trainer mixes hard and random negatives because training only on extremely difficult negatives can harm easy-case discrimination. Sentence Transformers’ training guidance emphasizes hard-negative mining while also retaining suitable negative diversity.  
+
+The trainer also oversamples the weak SOC major groups identified in your audit:
+
+qe4ar: 15, 17, 25, 51, 55
+qe5ar: 15, 17, 45, 51, 53, 55
+
+3. A separate calibration dataset is now required
+
+Your permanent Gold file stays untouched.
+
+The prior training_MODEL.sav is divided into:
+
+training_FIT.sav
+training_CALIBRATION.sav
+
+Their roles are:
+
+FIT:
+train classifiers, semantic memory, adaptive memory, and the Cross-Encoder
+CALIBRATION:
+learn candidate-fusion weights, confidence calibration, and conformal thresholds
+GOLD:
+final untouched comparison only
+
+This separation matters because a calibrator evaluated on the same records used to fit it will look better than it really is. Scikit-learn’s calibration documentation recommends disjoint fitting and calibration data, and warns that isotonic calibration can overfit on small calibration samples. V2 uses isotonic only when support is sufficient and otherwise uses sigmoid calibration.  
+
+4. Candidate fusion is learned rather than hand-weighted
+
+The previous system used fixed weights for ML probability, semantic similarity, and Cross-Encoder score.
+
+V2 trains a small candidate-level stacking model using calibration data. Its inputs include:
+
+supervised model score
+semantic-memory score
+Cross-Encoder score
+candidate rank
+adaptive-memory evidence
+dictionary evidence
+prefix compatibility
+prediction-source flags
+
+It learns how these signals should be combined separately for:
+
+qa20a
+qe4ar
+qe5ar
+
+This directly addresses the apples-and-oranges problem of adding SVM margins, cosine similarities, and transformer logits using fixed weights.
+
+5. Confidence is calibrated separately by source
+
+The audit proved that sources behave very differently:
+
+adaptive exact: around 98% accurate
+dictionary: around 95% to 97% accurate
+model-only SOC: around 45% accurate
+
+One universal confidence mapping is therefore inappropriate.
+
+V2 calibrates confidence according to prediction source, so a 0.90 score from an adaptive exact rule is not treated identically to a 0.90 converted SVM margin.
+
+6. APS conformal prediction sets are added
+
+V2 can calculate a smallest plausible set of codes for a requested empirical coverage level.
+
+For example:
+
+Row A: {291141}
+Row B: {131072, 131199}
+Row C: {472061, 472079, 499071}
+
+This is more defensible than pretending every row has one certain answer. APS and RAPS are established conformal methods for constructing multiclass prediction sets using calibration data.  
+
+The audit reports:
+
+empirical coverage
+average prediction-set size
+median set size
+90th-percentile set size
+coverage by target and subgroup
+
+7. The semantic memory now stores code prototypes
+
+Instead of relying only on thousands of raw historical examples, V2 creates representative per-code prototypes from examples closest to each code’s embedding centroid.
+
+This gives the Cross-Encoder cleaner candidate evidence and reduces the chance that one odd historical wording becomes the sole representative of a code.
+
+8. The audit is expanded
+
+The next upload package will include all previous metrics plus:
+
+top-10 candidate recall
+top-20 candidate recall
+top-1 before reranking
+top-1 after reranking
+net reranker gain
+candidate stacker coefficients and diagnostics
+conformal empirical coverage
+conformal set sizes
+calibration performance by prediction source
+weak-group reranker gains
+runtime by stage
+
+This will tell us whether any remaining error is caused by:
+
+candidate generation
+candidate ranking
+confidence calibration
+insufficient labels
+historical drift
+weak code descriptions
+specific SOC groups
+
+How to run V2 using your existing Gold benchmark
+
+Keep this exact file unchanged:
+
+C:\laborshed_autocode_clean\training_EVALUATION_GOLD.sav
+
+Do not recreate it. Using the same Gold file is what makes the new metrics directly comparable to the baseline you posted.
+
+Step 1: Extract V2 over the existing project folder
+
+Extract:
+
+NAICS_SOC_RERANKER_V2_PACKAGE.zip
+
+into:
+
+C:\laborshed_autocode_clean
+
+The existing files can remain. V2 uses distinct script names.
+
+Step 2: Install the additional requirements
+
+In Positron:
+
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+cd C:\laborshed_autocode_clean
+.\00_INSTALL_V2_REQUIREMENTS.ps1 `
+  -Base C:\laborshed_autocode_clean
+
+Step 3: Create a calibration split
+
+This divides the old model-training partition while leaving Gold sealed:
+
+cd C:\laborshed_autocode_clean
+.\00A_CREATE_CALIBRATION_KEEP_EXISTING_GOLD.ps1 `
+  -Base C:\laborshed_autocode_clean `
+  -CalibrationFraction 0.12
+
+This creates:
+
+training_FIT.sav
+training_CALIBRATION.sav
+
+Your existing:
+
+training_EVALUATION_GOLD.sav
+
+is not read or modified by this step.
+
+When a reliable date or survey-year field exists, use it:
+
+.\00A_CREATE_CALIBRATION_KEEP_EXISTING_GOLD.ps1 `
+  -Base C:\laborshed_autocode_clean `
+  -DateCol "survey_year" `
+  -CalibrationFraction 0.12
+
+Step 4: Fine-tune the domain Cross-Encoder
+
+cd C:\laborshed_autocode_clean
+.\01_TRAIN_DOMAIN_CROSS_ENCODER_CUDA.ps1 `
+  -Base C:\laborshed_autocode_clean
+
+The RTX 2050-safe defaults are:
+
+CUDA
+batch size 4
+gradient accumulation 8
+FP16
+one epoch
+visible step, loss, elapsed-time, and ETA reporting
+
+Outputs:
+
+C:\laborshed_autocode_clean\models\domain_cross_encoder\final
+C:\laborshed_autocode_clean\models\domain_cross_encoder\
+domain_reranker_training_report.json
+C:\laborshed_autocode_clean\
+console_DOMAIN_RERANKER_TRAIN_live.log
+
+Estimated runtime on your RTX 2050:
+
+approximately 4 to 12 hours
+
+Step 5: Run preflight
+
+cd C:\laborshed_autocode_clean
+.\04_PREFLIGHT_V2.ps1 `
+  -Base C:\laborshed_autocode_clean
+
+It verifies:
+
+training_FIT.sav
+training_CALIBRATION.sav
+training_EVALUATION_GOLD.sav
+domain Cross-Encoder
+CUDA
+FAISS
+required packages
+Hugging Face offline cache
+
+Step 6: Train and audit V2
+
+cd C:\laborshed_autocode_clean
+.\02_TRAIN_RERANKER_V2_AUDITED_CUDA.ps1 `
+  -Base C:\laborshed_autocode_clean `
+  -RunLabel "reranker_v2"
+
+When you have identified more context fields:
+
+.\02_TRAIN_RERANKER_V2_AUDITED_CUDA.ps1 `
+  -Base C:\laborshed_autocode_clean `
+  -DateCol "survey_year" `
+  -LocationCols "qe2b,county,state" `
+  -NumericCols "qe10,hourly_wage" `
+  -RunLabel "reranker_v2"
+
+Estimated runtime:
+
+approximately 16 to 32 hours
+
+All major stages appear live in Positron and are written to durable console logs.
+
+Step 7: Upload the next audit
+
+After completion, find the new:
+
+CHAT_UPLOAD_MODEL_IMPROVEMENT.zip
+
+under:
+
+C:\laborshed_autocode_clean\model_audits
+
+Upload that ZIP here.
+
+The V2 report will allow direct baseline comparison against:
+
+qa20a top-1: 0.8480
+qe4ar top-1: 0.6678
+qe5ar top-1: 0.6987
+
+How I would judge whether V2 deserves promotion
+
+I would not promote it merely because it contains more transformer flourishes. I would look for:
+
+Higher top-1 accuracy on the same Gold file
+Higher macro-F1, particularly for rare codes
+Positive pre/post reranker gain
+Lower NAICS ECE
+Improved weak-SOC-group performance
+Useful conformal coverage with manageable set sizes
+No deterioration in adaptive exact or dictionary performance
+Acceptable runtime
+
+A reasonable result would be a modest overall top-1 gain accompanied by a larger gain on model-only rows and weak SOC groups. The full top-1-to-top-4 gap is an upper bound, not a promise.
+
+Important testing note
+
+I syntax-compiled every Python program in the V2 package. I also ran synthetic tests of:
+
+candidate stacking
+confidence calibration
+top-K evaluation
+reranker before/after metrics
+conformal coverage reporting
+audit ZIP generation
+
+I could not perform a real .sav end-to-end run inside this environment because the runtime here does not have your SPSS files, pyreadstat, or the CUDA transformer stack installed.
+
+The current baseline is already a useful system. V2 is the strongest evidence-driven next build because it spends compute on the measured bottleneck: getting the correct candidate from positions two through four into position one.
