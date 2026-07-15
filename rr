@@ -1,0 +1,391 @@
+Yes. I built a comprehensive, resumable experiment battery that checks essentially every practical reranker avenue available in the current package, one GPU job at a time.
+
+Download the complete V2.4 experiment battery⁠￼
+
+Useful individual files:
+
+Full battery README⁠￼
+Experiment orchestrator⁠￼
+Enhanced Cross-Encoder trainer⁠￼
+Battery summarizer⁠￼
+One-command marathon runner⁠￼
+
+What this battery tests
+
+The suite systematically tests:
+
+1. Random-seed stability.
+2. Learning rates.
+3. Hard-negative versus random-negative ratios.
+4. Semantic, hierarchy-only, and hybrid negative selection.
+5. Full-context versus title-only and other field-ablation variants.
+6. Binary cross-entropy, RankNet, ListNet, and LambdaLoss.
+7. Small, medium, large, and extra-large training budgets.
+8. Input sequence lengths of 256, 384, and 512 tokens.
+9. One, three, five, and eight historical prototype examples per code.
+10. Candidate retrieval pools of 20, 30, 50, and 80 codes.
+11. Balanced class sampling versus production-frequency sampling.
+12. Weak-SOC-group oversampling.
+13. Separate target models versus shared SOC and shared NAICS/SOC models.
+14. Optional MiniLM-L12 and BGE reranker base models.
+15. Five-seed, larger-budget confirmation of the best screening recipes.
+
+Sentence Transformers officially supports the BCE and listwise/pairwise ranking losses used here, including RankNet, ListNet, and LambdaLoss. Its listwise losses use query, candidate-list, and relevance-list training records, which the enhanced trainer now creates.  
+
+The negative-mining tests are also deliberate. Sentence Transformers notes that strong hard negatives are important for Cross-Encoder training, but training exclusively on difficult negatives can reduce easy-case performance, so the battery separately tests semantic negatives, hierarchy negatives, and mixtures containing random negatives.  
+
+Two different evaluations are calculated
+
+Every experiment reports both:
+
+Oracle reranking: the true code is guaranteed to be in the candidate list. This isolates how well the Cross-Encoder ranks candidates.
+
+Retrieval-pipeline evaluation: the true code is not artificially inserted. This measures candidate generation plus reranking together.
+
+It also calculates candidate recall at:
+
+Top 1
+Top 4
+Top 10
+Top 20
+Top 40
+
+This distinction is crucial:
+
+High oracle performance + low candidate recall
+= improve retrieval/candidate generation.
+High candidate recall + low oracle improvement
+= improve reranker training.
+Both high
+= recipe is a serious promotion candidate.
+
+Install the package
+
+Extract the ZIP directly into:
+
+C:\laborshed_autocode_clean
+
+Choose Replace files when prompted. It does not recreate or modify:
+
+training_FIT.sav
+training_CALIBRATION.sav
+training_EVALUATION_GOLD.sav
+.venv
+hf_cache
+embedding_cache
+
+The battery uses only FIT and CALIBRATION. It does not read the sealed Gold file. Gold remains reserved for the final end-to-end model comparison.
+
+Step 1: install/check the battery dependencies
+
+In Positron:
+
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+cd C:\laborshed_autocode_clean
+.\00_INSTALL_BATTERY_REQUIREMENTS.ps1
+
+Then:
+
+.\00_BATTERY_PREFLIGHT.ps1
+
+The preflight checks:
+
+training_FIT.sav
+training_CALIBRATION.sav
+CUDA-enabled PyTorch
+RTX 2050 visibility
+FAISS
+Sentence Transformers
+Datasets
+All four loss functions
+Offline BGE embedding model
+Offline default Cross-Encoder
+
+Expected ending:
+
+PRECHECK PASSED.
+
+Step 2: optionally cache the additional base rerankers
+
+The exhaustive and marathon profiles can test:
+
+cross-encoder/ms-marco-MiniLM-L12-v2
+BAAI/bge-reranker-base
+
+While connected to the internet, run:
+
+cd C:\laborshed_autocode_clean
+.\00A_CACHE_OPTIONAL_BASE_MODELS.ps1
+
+Then confirm they work offline:
+
+.\00_BATTERY_PREFLIGHT.ps1 -CheckOptionalModels
+
+If either optional model fails to cache, omit -IncludeOptionalModels. The rest of the battery still runs.
+
+Step 3: inspect the scheduled tests
+
+For the standard suite:
+
+.\05_DRY_RUN_BATTERY_MANIFEST.ps1 -Profile standard
+
+For the full marathon:
+
+.\05_DRY_RUN_BATTERY_MANIFEST.ps1 `
+  -Profile marathon `
+  -IncludeOptionalModels
+
+Approximate experiment counts:
+
+smoke:       9
+standard:  101
+exhaustive: 131 with optional models
+marathon:  152 with optional models
+
+The confirmatory phase is separate and normally adds up to 30 larger experiments.
+
+Recommended approach
+
+I recommend running the standard profile first, summarizing it, and then running confirmation.
+
+cd C:\laborshed_autocode_clean
+.\01_RUN_COMPREHENSIVE_RERANKER_BATTERY.ps1 `
+  -Profile standard
+
+Planning estimate:
+
+Approximately 4 to 10 days
+
+The exact time depends on sequence length, listwise loss behavior, GPU thermals, and whether an experiment encounters an especially slow recipe.
+
+The longest all-avenues profile is:
+
+.\01_RUN_COMPREHENSIVE_RERANKER_BATTERY.ps1 `
+  -Profile marathon `
+  -IncludeOptionalModels
+
+Planning estimate:
+
+Approximately 10 to 24 days
+
+The suite is designed for this. It runs one experiment at a time, saves checkpoints, skips completed experiments, records failures, and proceeds to the next test.
+
+One-command marathon
+
+After optional models are cached:
+
+cd C:\laborshed_autocode_clean
+.\09_RUN_ENTIRE_MARATHON_PIPELINE.ps1 `
+  -IncludeOptionalModels
+
+This automatically performs:
+
+Preflight
+Marathon screening battery
+Screening summary
+Five-seed confirmation of the leading recipes
+Confirmatory summary
+
+This is the “leave the laptop plugged in and let the laboratory hum” option.
+
+Live progress in Positron
+
+The orchestrator always prints:
+
+Experiment number and ID
+Stage and target
+Loss function
+Base model
+Anchor count
+Optimizer step budget
+Learning rate
+Negative-selection recipe
+Context profile
+GPU utilization
+VRAM use
+CPU/RAM status
+Minutes since the trainer last printed output
+
+Even if the trainer itself is quiet, the battery emits a heartbeat once per minute:
+
+[BATTERY HEARTBEAT]
+experiment=...
+elapsed=...
+quiet_for=...
+GPU util=...
+mem=...
+RSS=...
+
+Each experiment has its own log under:
+
+C:\laborshed_autocode_clean\logs\reranker_battery_standard
+
+or the matching profile folder.
+
+Check status at any time
+
+Open another Positron terminal:
+
+cd C:\laborshed_autocode_clean
+.\03_RERANKER_BATTERY_STATUS.ps1 `
+  -Profile standard
+
+It shows:
+
+Scheduled experiment count
+Complete count
+Failed count
+Last experiment processed
+Active Python processes
+GPU status
+Tail of the newest experiment log
+
+Interrupt and resume
+
+Press Ctrl+C once in the battery terminal.
+
+Then later rerun:
+
+.\02_RESUME_COMPREHENSIVE_RERANKER_BATTERY.ps1 `
+  -Profile standard
+
+Completed reports are skipped. An interrupted experiment resumes from its newest checkpoint when one exists.
+
+You do not lose the entire suite because Windows wants an update or the laptop needs to travel.
+
+Run only one avenue
+
+Examples:
+
+# Loss-function comparison only
+.\06_RUN_ONE_BATTERY_STAGE.ps1 `
+  -Profile standard `
+  -Stage 05_loss
+# Context-field ablations only
+.\06_RUN_ONE_BATTERY_STAGE.ps1 `
+  -Profile standard `
+  -Stage 04_context
+# Optional base-model comparison
+.\06_RUN_ONE_BATTERY_STAGE.ps1 `
+  -Profile exhaustive `
+  -Stage 12_base_model `
+  -IncludeOptionalModels
+
+Useful stage names include:
+
+01_seed
+02_lr
+03_negatives
+04_context
+05_loss
+06_budget
+07_length
+08_prototypes
+08_retrieval
+09_sampling
+09_weak
+10_shared
+11_deep_lr
+11_deep_neg
+11_deep_budget
+12_base_model
+13_extra_seeds
+13_listwise_large
+
+Summarize the screening battery
+
+After any number of experiments, even before all are complete:
+
+.\04_SUMMARIZE_RERANKER_BATTERY.ps1 `
+  -Profile standard
+
+This creates:
+
+C:\laborshed_autocode_clean\
+reranker_battery_reports\standard\
+
+with:
+
+battery_summary.md
+battery_summary.json
+battery_run_results.csv
+battery_recipe_summary.csv
+battery_failures.csv
+CHAT_UPLOAD_RERANKER_BATTERY.zip
+
+The summary groups identical recipes across seeds and reports:
+
+Mean top-1 change
+Top-1 standard deviation
+Mean top-4 change
+Mean MRR change
+Retrieval-pipeline changes
+Candidate recall
+Positive-seed count
+Runtime
+Promotion decision
+
+Upload:
+
+CHAT_UPLOAD_RERANKER_BATTERY.zip
+
+to this chat.
+
+It contains experiment settings and aggregate metrics, not raw survey text, employer names, or respondent identifiers.
+
+Confirm the winners at larger scale
+
+After the screening summary:
+
+.\07_RUN_CONFIRMATORY_WINNERS.ps1 `
+  -Profile standard `
+  -Seeds "101,102,103,104,105" `
+  -TopRecipesPerTarget 2
+
+This selects the top two recipes for each target and tests them using:
+
+Five new random seeds
+At least 5,000 NAICS anchors
+At least 8,000 SOC anchors
+At least 300 NAICS update steps
+At least 500 SOC update steps
+4,000 calibration evaluation rows
+5,000 bootstrap samples
+
+Then summarize:
+
+.\08_SUMMARIZE_CONFIRMATORY_WINNERS.ps1 `
+  -Profile standard
+
+The confirmatory report is saved separately under:
+
+reranker_battery_reports\confirmatory_standard
+
+Promotion rule
+
+The summarizer marks a recipe PROMISING only when:
+
+Mean top-1 change is positive.
+Mean MRR change is positive.
+At least half the runs improve top-1.
+At least half the runs improve MRR.
+Top-4 does not decline by more than 0.5 percentage points.
+
+A single lucky seed is not enough.
+
+What to do after the battery
+
+The final sequence is:
+
+1. Run screening battery.
+2. Upload screening summary.
+3. Run confirmatory winners.
+4. Upload confirmatory summary.
+5. Wire only the validated target-specific winners into the full audited autocoder.
+6. Run that final model once against the untouched Evaluation Gold file.
+7. Compare it with the original Gold baseline:
+   qa20a top-1 84.80%
+   qe4ar top-1 66.78%
+   qe5ar top-1 69.87%
+
+I syntax-compiled every Python program in the battery and synthetic-tested its manifest generation and summary/ZIP production. I could not run the real multi-day CUDA battery here because this environment does not contain your .sav files, Windows CUDA stack, or project virtual environment.
